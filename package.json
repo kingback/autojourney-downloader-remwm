@@ -1,0 +1,16 @@
+{
+  "name": "autojourney-downloader-remwm",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "release": "node ./scripts/build.mjs && node ./scripts/release.mjs"
+  },
+  "dependencies": {
+    "archiver": "^6.0.1",
+    "octokit": "^4.0.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

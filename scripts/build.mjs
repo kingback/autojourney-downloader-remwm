@@ -6,19 +6,27 @@ import { checkNodeVersion } from './version-check.mjs';
 
 const filesSrc = 'src/files';
 const outputDist = 'dist';
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const version = pkg.version;
 
-// 读取package.json获取版本号
-function getVersion() {
-  const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-  return packageJson.version;
-}
-
-// 计算文件的SHA512校验和
+// 计算文件的SHA512校验和（使用流式处理以支持大文件）
 function calculateSHA512(filePath) {
-  const hash = crypto.createHash('sha512');
-  const fileBuffer = fs.readFileSync(filePath);
-  hash.update(fileBuffer);
-  return hash.digest('base64');
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha512');
+    const stream = fs.createReadStream(filePath);
+    
+    stream.on('data', (chunk) => {
+      hash.update(chunk);
+    });
+    
+    stream.on('end', () => {
+      resolve(hash.digest('base64'));
+    });
+    
+    stream.on('error', (err) => {
+      reject(err);
+    });
+  });
 }
 
 // 获取文件大小（字节）
@@ -28,11 +36,12 @@ function getFileSize(filePath) {
 }
 
 // 压缩文件夹为zip文件
-function zipFolder(sourcePath, outputPath) {
+function zipFolder(sourcePath, outputPath, forceZip64) {
   return new Promise((resolve, reject) => {
     const output = fs.createWriteStream(outputPath);
     const archive = archiver('zip', {
-      zlib: { level: 9 } // 最大压缩级别
+      zlib: { level: 9 }, // 最大压缩级别
+      forceZip64 // 强制启用 ZIP64 格式以支持超过 2GB 的文件
     });
 
     output.on('close', () => {
@@ -51,10 +60,10 @@ function zipFolder(sourcePath, outputPath) {
 }
 
 // 生成info.json文件
-function generateInfoJson(version, files) {
+function generateInfoJson(files) {
   const info = {
-    version: version,
-    files: files,
+    version,
+    files,
     releaseDate: new Date().toISOString()
   };
   return JSON.stringify(info, null, 2);
@@ -66,7 +75,6 @@ async function build() {
     // 检查 Node.js 版本
     checkNodeVersion();
     
-    const version = getVersion();
     console.log(`🚀 开始构建版本: ${version}`);
 
     // 创建输出目录
@@ -95,13 +103,28 @@ async function build() {
       const sourcePath = path.join(filesDir, folder.name);
       const zipFileName = `${folder.name}.zip`;
       const outputPath = path.join(outputDir, zipFileName);
+      const packageJsonPath = path.join(sourcePath, 'package.json');
 
       console.log(`📦 正在压缩: ${folder.name}`);
 
+      // 复制 package.json 到文件夹中（支持覆盖）
+      if (fs.existsSync(packageJsonPath)) {
+        fs.unlinkSync(packageJsonPath);
+      }
+      fs.writeFileSync(packageJsonPath, JSON.stringify({
+        ...pkg,
+        name: folder.name
+      }, null, 2));
+      console.log(`  ✓ 已生成 package.json 到 ${folder.name}`);
+
       await zipFolder(sourcePath, outputPath);
 
+      // 压缩完成后删除复制的 package.json
+      fs.unlinkSync(packageJsonPath);
+      console.log(`  ✓ 已删除临时 package.json`);
+
       // 计算文件信息
-      const sha512 = calculateSHA512(outputPath);
+      const sha512 = await calculateSHA512(outputPath);
       const size = getFileSize(outputPath);
 
       files.push({
@@ -114,7 +137,7 @@ async function build() {
     }
 
     // 生成info.json文件
-    const infoJson = generateInfoJson(version, files);
+    const infoJson = generateInfoJson(files);
     const infoPath = path.join(outputDir, 'info.json');
     fs.writeFileSync(infoPath, infoJson);
 
@@ -136,6 +159,7 @@ async function build() {
     };
 
   } catch (error) {
+    console.error(error);
     console.error('❌ 构建失败:', error.message);
     process.exit(1);
   }
